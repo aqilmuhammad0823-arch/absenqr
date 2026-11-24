@@ -598,6 +598,11 @@
       flex: 1;
     }
 
+    .camera-switch-buttons button {
+      font-size: 11px;
+      padding: 11px 6px;
+    }
+
 
     /* ==================================================
        QR CARD
@@ -1160,6 +1165,15 @@
 
         </div>
 
+        <div class="scanner-buttons camera-switch-buttons">
+          <button type="button" class="small-btn" onclick="switchScannerCamera('user')">
+            🤳 KAMERA DEPAN
+          </button>
+          <button type="button" class="small-btn" onclick="switchScannerCamera('environment')">
+            📷 KAMERA BELAKANG
+          </button>
+        </div>
+
       </div>
 
 
@@ -1579,6 +1593,7 @@
 
     let scannerStream = null;
     let scannerRunning = false;
+    let scannerFacingMode = 'environment';
     let lastScannedCode = '';
     let lastScanTime = 0;
 
@@ -1708,9 +1723,9 @@
         const timeout = setTimeout(function() {
           cleanup();
           reject(new Error(
-            'Server tidak merespons. Pastikan deployment Apps Script memakai akses Anyone, lalu gunakan URL deployment terbaru.'
+            'Server belum memberi jawaban dalam 18 detik. Periksa Apps Script > Executions dan pastikan deployment terbaru memakai akses Anyone.'
           ));
-        }, 45000);
+        }, 18000);
 
         document.body.appendChild(iframe);
         document.body.appendChild(form);
@@ -1784,7 +1799,9 @@
 
         showApp();
 
-        await loadAll();
+        // Tampilkan menu segera setelah autentikasi berhasil.
+        // Data dashboard dimuat sesudahnya tanpa menahan perpindahan halaman.
+        loadAll();
 
       } catch (error) {
 
@@ -3087,88 +3104,100 @@
        QR SCANNER
     ================================================== */
 
-    async function startScanner() {
+    async function startScanner(facingMode) {
+
+      if (facingMode) scannerFacingMode = facingMode;
 
       if (!window.isSecureContext) {
+        showToast('Kamera membutuhkan koneksi HTTPS.', 'error');
+        return;
+      }
 
-        showToast(
-          'Kamera membutuhkan koneksi HTTPS.',
-          'error'
-        );
-
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        showToast('Browser ini tidak mendukung akses kamera. Buka melalui Chrome HTTPS.', 'error');
         return;
       }
 
       if (!window.jsQR) {
-
-        showToast(
-          'Library QR Scanner belum siap. Coba refresh halaman.',
-          'error'
-        );
-
+        showToast('Library QR Scanner belum siap. Coba refresh halaman.', 'error');
         return;
       }
 
       stopScanner();
 
-      const video =
-        document.getElementById(
-          'qrVideo'
-        );
-
-      const status =
-        document.getElementById(
-          'scannerStatus'
-        );
+      const video = document.getElementById('qrVideo');
+      const status = document.getElementById('scannerStatus');
 
       try {
+        status.textContent = scannerFacingMode === 'user'
+          ? 'Mengaktifkan kamera depan...'
+          : 'Mengaktifkan kamera belakang...';
 
-        status.textContent =
-          'Meminta izin kamera...';
+        // Gunakan exact agar tombol depan/belakang benar-benar mengganti kamera.
+        // Jika perangkat tidak mengenali pilihan tersebut, coba mode ideal.
+        const constraints = {
+          audio: false,
+          video: {
+            facingMode: { exact: scannerFacingMode },
+            width: { ideal: 960 },
+            height: { ideal: 720 }
+          }
+        };
 
-        scannerStream =
-          await navigator.mediaDevices
-            .getUserMedia({
-              video: {
-                facingMode: {
-                  ideal: 'environment'
-                },
-                width: {
-                  ideal: 1280
-                },
-                height: {
-                  ideal: 720
-                }
-              },
-              audio: false
-            });
+        try {
+          scannerStream = await navigator.mediaDevices.getUserMedia(constraints);
+        } catch (firstError) {
+          scannerStream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+              facingMode: { ideal: scannerFacingMode },
+              width: { ideal: 960 },
+              height: { ideal: 720 }
+            }
+          });
+        }
 
-        video.srcObject =
-          scannerStream;
-
+        video.srcObject = scannerStream;
         await video.play();
 
         scannerRunning = true;
-
-        status.textContent =
-          'Arahkan kamera ke QR Code siswa...';
+        status.textContent = scannerFacingMode === 'user'
+          ? 'Kamera depan aktif. Arahkan ke QR Code siswa...'
+          : 'Kamera belakang aktif. Arahkan ke QR Code siswa...';
 
         scanQRCode();
 
       } catch (error) {
-
-        console.error(error);
-
-        status.textContent =
-          'Kamera tidak dapat digunakan.';
-
-        showToast(
-          'Izinkan akses kamera pada browser.',
-          'error'
-        );
-
+        console.error('Scanner error:', error);
+        status.textContent = 'Kamera tidak dapat digunakan.';
+        let message = 'Kamera gagal dibuka. Pastikan izin kamera diberikan.';
+        if (error && (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError')) {
+          message = 'Izin kamera ditolak. Izinkan kamera untuk situs GitHub Pages ini.';
+        } else if (error && error.name === 'NotFoundError') {
+          message = 'Kamera yang dipilih tidak ditemukan di perangkat ini.';
+        } else if (error && error.name === 'NotReadableError') {
+          message = 'Kamera sedang digunakan aplikasi lain. Tutup aplikasi kamera lain lalu coba lagi.';
+        }
+        showToast(message, 'error');
       }
 
+    }
+
+    async function switchScannerCamera(facingMode) {
+      scannerFacingMode = facingMode === 'user' ? 'user' : 'environment';
+      const wasRunning = scannerRunning || !!scannerStream;
+      stopScanner();
+      if (wasRunning) {
+        await startScanner(scannerFacingMode);
+      } else {
+        const status = document.getElementById('scannerStatus');
+        if (status) {
+          status.textContent = scannerFacingMode === 'user'
+            ? 'Kamera depan dipilih. Tekan MULAI SCAN.'
+            : 'Kamera belakang dipilih. Tekan MULAI SCAN.';
+        }
+        showToast(scannerFacingMode === 'user' ? 'Kamera depan dipilih.' : 'Kamera belakang dipilih.', 'success');
+      }
     }
 
 

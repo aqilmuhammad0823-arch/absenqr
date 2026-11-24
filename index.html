@@ -1708,9 +1708,9 @@
         const timeout = setTimeout(function() {
           cleanup();
           reject(new Error(
-            'Server tidak merespons. Periksa koneksi internet atau deployment API.'
+            'Server tidak merespons. Pastikan deployment Apps Script memakai akses Anyone, lalu gunakan URL deployment terbaru.'
           ));
-        }, 30000);
+        }, 45000);
 
         document.body.appendChild(iframe);
         document.body.appendChild(form);

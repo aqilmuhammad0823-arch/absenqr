@@ -1231,11 +1231,18 @@
       <div class="section-title">
         <h3>👨‍🎓 Data Siswa</h3>
 
-        <button
-          id="addStudentBtn"
-          onclick="openStudentModal()">
-          ＋ Tambah
-        </button>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+          <button
+            id="importStudentBtn"
+            onclick="openImportStudent()">
+            📥 Impor CSV
+          </button>
+          <button
+            id="addStudentBtn"
+            onclick="openStudentModal()">
+            ＋ Tambah
+          </button>
+        </div>
       </div>
 
       <input
@@ -1496,6 +1503,37 @@
 
   </div>
 
+
+  <!-- ==================================================
+       IMPORT STUDENTS MODAL
+  ================================================== -->
+  <div id="importStudentModal" class="modal hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>📥 Impor Database Siswa</h3>
+        <button class="close-btn" onclick="closeImportStudent()">×</button>
+      </div>
+      <p style="color:#c7b18a;font-size:13px;line-height:1.6;margin-top:0;">
+        Pilih file CSV berisi daftar siswa. Data dengan ID yang sudah terdaftar akan dilewati dan tidak menimpa data lama.
+      </p>
+      <div class="input-group">
+        <label>File Database (.csv)</label>
+        <input id="studentCsvFile" type="file" accept=".csv,text/csv">
+      </div>
+      <div style="font-size:12px;color:#bda77e;line-height:1.7;margin:8px 0 16px;">
+        <b>Format kolom:</b><br>
+        ID_SISWA, NAMA, JK, KELAS<br>
+        Contoh: S036, Nama Siswa, L, XII.F12<br>
+        JK diisi <b>L</b> untuk laki-laki atau <b>P</b> untuk perempuan.
+      </div>
+      <button class="section-title" style="width:100%;justify-content:center;border:1px solid #72532f;background:#24170f;color:#e6c37b;border-radius:9px;padding:10px;" onclick="downloadStudentCsvTemplate()">
+        ⬇️ Unduh Template CSV
+      </button>
+      <button class="btn-primary" style="margin-top:12px;" onclick="importStudentCsv()">
+        📥 IMPOR DATA SISWA
+      </button>
+    </div>
+  </div>
 
   <!-- ==================================================
        QR MODAL
@@ -2325,6 +2363,106 @@
 
     }
 
+
+    function openImportStudent() {
+      if (!currentUser || currentUser.role !== 'ADMIN') {
+        showToast('Hanya Administrator yang dapat mengimpor siswa.', 'error');
+        return;
+      }
+      document.getElementById('studentCsvFile').value = '';
+      document.getElementById('importStudentModal').classList.remove('hidden');
+    }
+
+    function closeImportStudent() {
+      document.getElementById('importStudentModal').classList.add('hidden');
+    }
+
+    function downloadStudentCsvTemplate() {
+      const csv = '\uFEFFID_SISWA,NAMA,JK,KELAS\r\nS036,Nama Siswa,L,XII.F12\r\nS037,Nama Siswi,P,XII.F12';
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'template_database_siswa.csv';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function parseStudentCsv(text) {
+      const rows = [];
+      let row = [];
+      let cell = '';
+      let quoted = false;
+      for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (ch === '"') {
+          if (quoted && text[i + 1] === '"') { cell += '"'; i++; }
+          else quoted = !quoted;
+        } else if (ch === ',' && !quoted) {
+          row.push(cell.trim()); cell = '';
+        } else if ((ch === '\n' || ch === '\r') && !quoted) {
+          if (ch === '\r' && text[i + 1] === '\n') i++;
+          row.push(cell.trim());
+          if (row.some(function(v) { return v !== ''; })) rows.push(row);
+          row = []; cell = '';
+        } else {
+          cell += ch;
+        }
+      }
+      row.push(cell.trim());
+      if (row.some(function(v) { return v !== ''; })) rows.push(row);
+      if (!rows.length) throw new Error('File CSV kosong.');
+
+      const headers = rows.shift().map(function(h) {
+        return h.replace(/^\uFEFF/, '').trim().toUpperCase();
+      });
+      const index = {
+        id: headers.indexOf('ID_SISWA'),
+        nama: headers.indexOf('NAMA'),
+        jk: headers.indexOf('JK'),
+        kelas: headers.indexOf('KELAS')
+      };
+      if (index.id < 0 || index.nama < 0 || index.jk < 0 || index.kelas < 0) {
+        throw new Error('Header CSV harus: ID_SISWA, NAMA, JK, KELAS. Unduh template jika diperlukan.');
+      }
+      return rows.map(function(r) {
+        return { id: r[index.id] || '', nama: r[index.nama] || '', jk: r[index.jk] || '', kelas: r[index.kelas] || 'XII.F12' };
+      });
+    }
+
+    async function importStudentCsv() {
+      const fileInput = document.getElementById('studentCsvFile');
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) {
+        showToast('Pilih file CSV terlebih dahulu.', 'error');
+        return;
+      }
+      if (!file.name.toLowerCase().endsWith('.csv')) {
+        showToast('Format file harus CSV.', 'error');
+        return;
+      }
+      try {
+        const content = await file.text();
+        const rows = parseStudentCsv(content);
+        if (!rows.length) throw new Error('Tidak ada baris siswa di dalam file.');
+        if (rows.length > 500) throw new Error('Maksimal 500 siswa dalam satu kali impor.');
+        if (!confirm('Impor ' + rows.length + ' baris siswa dari file ini? ID yang sudah ada akan dilewati.')) return;
+        showLoading('Mengimpor database siswa...');
+        const result = await server('imporSiswa', sessionId, rows);
+        hideLoading();
+        closeImportStudent();
+        await loadStudents();
+        await loadDashboard();
+        let message = result.message;
+        if (result.errors && result.errors.length) message += ' Detail: ' + result.errors.join(' | ');
+        showToast(message, result.imported > 0 ? 'success' : 'error');
+      } catch (error) {
+        hideLoading();
+        showToast(error.message || 'Gagal membaca file CSV.', 'error');
+      }
+    }
 
     function openStudentModal() {
 
